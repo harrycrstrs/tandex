@@ -19,7 +19,7 @@ import glob
 import datetime
 
 # Where are the interferograms stored?
-IFG_DIR = '/disk/scratch/local.4/harry/interferograms/'
+IFG_DIR = '/disk/scratch/local.4/harry/interferograms/useful/'
 
 # Where are you going to do your working?
 WOR_DIR = '/disk/scratch/local/harry/temp/'
@@ -155,10 +155,10 @@ def snaphu_unwrapping(ifg,unw_method):
                         '-PtargetFolder=' + export_dir,
                         '-PstatCostMode=' + unw_method,
                         '-PnumberOfProcessors=12',
-                        '-PnumberOfTileCols=6',
-                        '-PnumberOfTileRows=6',
-                        '-ProwOverlap=300',
-                        '-PcolOverlap=300',
+                        '-PnumberOfTileCols=1',
+                        '-PnumberOfTileRows=1',
+                        #'-ProwOverlap=300',
+                        #'-PcolOverlap=300',
                         ifg]))
     if exitcode == 1:
         return 'SnaphuExport FAILURE'

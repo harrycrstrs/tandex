@@ -29,6 +29,8 @@ param_names = ['ifg',                  # full path to xml file (str)
                'Nlooks',                 # Window size (az?) for multilooking (int)
                'use_filter',             # T to use Goldstein Phase filtering, F otherwise
                'unw_method',             # unwrapping criteria: T,D,S or N (see snaphu docs)
+               'tiles',                  # Number of tiles (rows/cols) to chunk data into for unwrapping
+               'overlap',                # pixel overlap between unwrapping tiles
                'height_method',          # H for 'phase to height', E for 'phase to elevation (see SNAP docs)
                'target_folder']          # full path to output directory (str)  
 
@@ -140,7 +142,7 @@ def goldstein(image):
     p = HashMap()
     return GPF.createProduct('GoldsteinPhaseFiltering',p,image)
 
-def snaphu_unwrapping(ifg,unw_method):
+def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
     pprint('Beginning snaphu_unwrapping' )
     export_dir = path.join(WOR_DIR,'snaphuExport/')
     snaphu_dir = path.join(export_dir,ifg.split('.')[0].split('/')[-1])
@@ -150,16 +152,20 @@ def snaphu_unwrapping(ifg,unw_method):
     pprint('Clearing snaphuExport directory' )
     bash('rm -r *')
     # ---------------------------Run snaphu export command
-    exitcode = bash(' '.join(['gpt',
+    cmd_list = ['gpt',
                         'SnaphuExport',
                         '-PtargetFolder=' + export_dir,
                         '-PstatCostMode=' + unw_method,
                         '-PnumberOfProcessors=12',
-                        '-PnumberOfTileCols=1',
-                        '-PnumberOfTileRows=1',
-                        #'-ProwOverlap=300',
-                        #'-PcolOverlap=300',
-                        ifg]))
+                        '-PnumberOfTileCols='+str(tiles),
+                        '-PnumberOfTileRows='+str(tiles)]
+    if tiles != 1:
+        cmd_list.append('-ProwOverlap='+str(overlap))
+        cmd_list.append('-PcolOverlap='+str(overlap))
+    else:
+        pass
+    cmd_list.append(ifg)
+    exitcode = bash(' '.join(cmd_list))
     if exitcode == 1:
         return 'SnaphuExport FAILURE'
     else:
@@ -242,7 +248,10 @@ def create_DEM(params):
 
     pprint('Time Elapsed on this product: '+str(datetime.datetime.now() - startT))
     
-    image = snaphu_unwrapping(temp_file,unw_dict.get(params.unw_method))
+    image = snaphu_unwrapping(temp_file,
+                              unw_dict.get(params.unw_method),
+                              params.tiles,
+                              params.overlap)
     
     if type(image) == str: # If there was a failure in the unwrapping
         return image

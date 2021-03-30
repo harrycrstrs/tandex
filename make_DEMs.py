@@ -24,19 +24,24 @@ IFG_DIR = '/disk/scratch/local.4/harry/interferograms/useful/'
 # Where are you going to do your working?
 WOR_DIR = '/disk/scratch/local/harry/temp/'
 
+# Areas to crop to (needs a better long-term solution)
+aoi_g = 'POLYGON((12.24259248791666899 -0.12970155056629756, 12.29813277791832959 -0.12785363430965335, 12.30306056704971596 -0.15772826280552016, 12.24259248791666899 -0.16050013350314909, 12.24259248791666899 -0.12970155056629756))'
+aoi_p = 'POLYGON((-69.73323900046604251 -11.01624899728848916, -69.7027921931213541 -11.01584634449108258, -69.70283777217426291 -11.04080977551521237, -69.73351247478349535 -11.04157027686576065, -69.73323900046604251 -11.01624899728848916))'
+
 # parameters - each row in parameter csv file must contain values for the following
 param_names = ['ifg',                  # full path to xml file (str)
                'Nlooks',                 # Window size (az?) for multilooking (int)
                'use_filter',             # T to use Goldstein Phase filtering, F otherwise
-               'unw_method',             # unwrapping criteria: T,D,S or N (see snaphu docs)
+               'unw_method',             # unwrapping criteria: T,D,S (see snaphu docs)
                'tiles',                  # Number of tiles (rows/cols) to chunk data into for unwrapping
                'overlap',                # pixel overlap between unwrapping tiles
                'height_method',          # H for 'phase to height', E for 'phase to elevation (see SNAP docs)
                'target_folder']          # full path to output directory (str)  
 
-unw_dict = {'T':'TOPO','D':'DEFO','S':'SMOOTH','N':'NOSTATCOSTS'} 
+unw_dict = {'T':'TOPO','D':'DEFO','S':'SMOOTH'} 
 
-def pprint(x):
+def pprint(x): 
+    # flush print with spacing to monitor progress via logfile
     print('*************')
     print(x,flush=True)
 
@@ -70,13 +75,14 @@ def check_p(params):
         issues.append('Nlooks must be 1 or more')
     if not (params.use_filter in ['T','F']):
         issues.append('use_filter must be T or F')
-    if not (params.unw_method in ['T','D','S','N']):
-        issues.append('unw_method must be T,D,S or N')
+    if not (params.unw_method in ['T','D','S']):
+        issues.append('unw_method must be T,D, or S')
     if not (params.height_method in ['E','H']):
         issues.append('height_method must be E or H')
     if not path.exists(params.target_folder):
         try: os.makedirs(params.target_folder)
         except: issues.append('unable to create target folder')
+    # NOTE tiles and overlap NOT included here as yet
     return issues
 
 def get_params():
@@ -97,8 +103,6 @@ def get_params():
         if len(issues) > 0 :
             pprint(issues)
             raise Exception('Problem with parameters - see above')
-        else:
-            pass
     return df
 
 def shape(product):
@@ -117,19 +121,41 @@ def target_file(params):
         TDX_IFG_[GAB/PER]_[SM/HS]_YYYYMMDDTHHMMSS.dim
     
     Returns : path of output file according to the naming convention:
-        TDX_DEM_[GAB/PER]_ML$$_f[T/F]_unw#_[H/E]_YYYYMMDDTHHMMSS.dim
+        TDX_DEM_[GAB/PER]_ML$$_f[T/F]_unw#_[H/E]_tiles%%_££__YYYYMMDDTHHMMSS.dim
         $$ is number of looks for phase
         [T/F] is T if filtering applied
         # is T,D,S, or N depending on unwrapping method
         [H/E] is H for height method, E for elevation method
+        %% is number of tiles (sqrt of) used for unwrapping
+        ££ is pixel overlapp
     """
-    country_mode = params.ifg.split('_')[2] + '_' + params.ifg.split('_')[3]
-    date = params.ifg.split('.')[0].split('_')[-1]
-    ml,fil,unw = str(params.Nlooks),params.use_filter,params.unw_method
-    hmethod = params.height_method
-    outfile = 'TDX_DEM_'+country_mode+'_ML'+ml+'_f'+fil+'_unw'+unw+'_'+hmethod+'_'+date+'.dim'
-    
+    parts = ['TDX','DEM']
+    parts.append(params.ifg.split('_')[2]) # country
+    parts.append(params.ifg.split('_')[3]) # mode
+    parts.append('ML'+str(params.Nlooks))  # multilooks
+    parts.append('f'+params.use_filter)    # filtering
+    parts.append('unw'+params.unw_method)  # unwrapping
+    parts.append(params.height_method)     # height conversion method
+    parts.append('tiles'+str(params.tiles))# number of unwrapping tiles
+    parts.append(str(params.overlap))      # row/col overlap for unwrapping tiles
+    parts.append(params.ifg.split('.')[0].split('_')[-1]) # finally, the datetime
+    # Now put an underscore between each element
+    outfile = '_'.join(parts) + '.dim'
     return path.join(params.target_folder,outfile)
+
+def crop(image,ifg):
+    pprint('Cropping to AOI: '+country)
+    p = HashMap()
+    if 'GAB' in ifg:
+        aoi = aoi_g
+    elif 'PER' in ifg:
+        aoi = aoi_p
+    else:
+        print('Cannot identify country')
+    p.put('geoRegion',aoi)
+    p.put('copyMetadata','true')
+    return GPF.createProduct('Subset',p,image)
+    
 
 def multilook(image,Nlooks):
     pprint('Multi-looking' )
@@ -162,14 +188,10 @@ def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
     if tiles != 1:
         cmd_list.append('-ProwOverlap='+str(overlap))
         cmd_list.append('-PcolOverlap='+str(overlap))
-    else:
-        pass
     cmd_list.append(ifg)
     exitcode = bash(' '.join(cmd_list))
     if exitcode == 1:
         return 'SnaphuExport FAILURE'
-    else:
-        pass
     #------------------- Extract snaphu unwrapping command
     with open('snaphu.conf','r') as file:
         line = file.readlines()[6]
@@ -177,8 +199,6 @@ def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
     exitcode = bash(cmd)
     if exitcode == 1:
         return 'SNAPHU UNWRAPPING FAIL'
-    else:
-        pass
     # ----------------------------Snaphu Import
     unwrapped_phase = glob.glob('./UnwPhase*.hdr')[0]
     pprint('Reading Unwrapped phase as: ' )
@@ -189,8 +209,6 @@ def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
                         unwrapped_phase]))
     if exitcode == 1:
         return 'SNAPHU IMPORT FAIL'
-    else:
-        pass
     pprint('Reading in target.dim' )
     product = ProductIO.readProduct('target.dim')
     return product
@@ -215,6 +233,12 @@ def terrain_cor(image):
     p.put('saveLocalIncidenceAngle','true')
     return GPF.createProduct('Terrain-Correction',p,image)
 
+def topo_removal(image):
+    pprint('Topographic Removal')
+    p = HashMap()
+    p.put('demName','SRTM 1Sec HGT')
+    return GPF.createProduct('TopoPhaseRemoval',p,image)
+
 def create_DEM(params):
     """
     params: set of parameters, given as row of dataframe (see get_params())
@@ -236,12 +260,13 @@ def create_DEM(params):
     
     pprint('Reading Interferogram' )
     image = ProductIO.readProduct(ifg_file)
+    image = crop(image,params.ifg)
+    if params.unw_method == 'D':
+        image = topo_removal(image)
     image = multilook(image,params.Nlooks)
     
     if params.use_filter == 'T':
         image = goldstein(image)
-    else:
-       pass
 
     pprint('Writing product to '+temp_file )
     ProductIO.writeProduct(image,temp_file,'BEAM-DIMAP' )
@@ -255,8 +280,6 @@ def create_DEM(params):
     
     if type(image) == str: # If there was a failure in the unwrapping
         return image
-    else:
-        pass
     
     pprint('Time Elapsed on this product' )
     pprint(str(datetime.datetime.now() - startT) )
@@ -266,8 +289,6 @@ def create_DEM(params):
     else:
         image = get_elevation(image)
         
-    
-    
     image = terrain_cor(image)
     
     pprint('Writing product to '+target_file(params) )

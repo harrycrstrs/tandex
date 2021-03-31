@@ -8,6 +8,8 @@ This script uses Snappy to extract the metadata from TDX interferograms
 
 Takes one command line argument - the directory containing the interferograms
 
+!! I think check_coverage returns TRUE regardless of the answer
+
 """
 
 from snappy import ProductIO, HashMap, GPF
@@ -16,6 +18,7 @@ import sys
 import os
 import pandas as pd
 import math
+from io import StringIO
 
 IFG_DIR = sys.argv[1]
 os.chdir(IFG_DIR)
@@ -43,20 +46,18 @@ def check_coverage(file,p):
         region = 'POLYGON((12.24885799008746368 -0.14350824099999146, 12.24885110630293283 -0.14259615803456555, 12.24975595848531107 -0.14259626696242139, 12.24975584715663501 -0.14353065658873754, 12.24885799008746368 -0.14350824099999146))'
     elif 'PER' in file:
         region = 'POLYGON((-69.72334001018973026 -11.0329910794429793, -69.72334358246895647 -11.03207312025939579, -69.72240573287906784 -11.0320753572009469, -69.7224080470953993 -11.03302282454907512, -69.72334001018973026 -11.0329910794429793))'
-    try:
-        params = HashMap().put('geoRegion',region)
-        cropped = GPF.createProduct('Subset',params,p)
-        ProductIO.writeProduct(cropped,'delete.dim','BEAM-DIMAP')
-        os.system('rm -r delete.d*')
-        return True
-    except:
-        return False
+    params = HashMap()
+    params.put('geoRegion',region)
+    
+    fail = 'Empty' in GPF.createProduct('Subset',params,p).getName()
+    return not fail
 
 df = pd.DataFrame( columns = attributes )    
 
 for file in ifgs:
     p = ProductIO.readProduct(file)
     MD = dict()
+    MD['file'] = file
     if 'GAB' in file:
         MD['country'] = 'Gabon'
     elif 'PER' in file:
@@ -77,7 +78,7 @@ for file in ifgs:
     MD['vertical_wavenumber'] = k
     MD['incidence_angle'] = float(str(cossc.getElement('commonSceneInfo').getElement('sceneCenterCoord').getAttribute('incidenceAngle').getData()))
     MD['bandwidth'] = str(cossc.getElement('CommonAcquisitionInfo').getElement('acquisitionMode').getElement('rangeBandwidthClass').getAttribute('rgBW').getData())
-    df = df.append(pd.Series(MD))
+    df = df.append(pd.Series(MD),ignore_index=True)
 
 df.to_csv('metadata.csv')
 # Done!

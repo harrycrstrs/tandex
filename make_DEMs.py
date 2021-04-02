@@ -11,6 +11,7 @@ Code for producing DEMs from TanDEM-X images
 from snappy import ProductIO
 from snappy import GPF
 from snappy import HashMap
+from snappy import ProductUtils
 import sys
 import os.path as path
 import os
@@ -29,8 +30,9 @@ aoi_g = 'POLYGON((12.24259248791666899 -0.12970155056629756, 12.2981327779183295
 aoi_p = 'POLYGON((-69.73323900046604251 -11.01624899728848916, -69.7027921931213541 -11.01584634449108258, -69.70283777217426291 -11.04080977551521237, -69.73351247478349535 -11.04157027686576065, -69.73323900046604251 -11.01624899728848916))'
 
 # parameters - each row in parameter csv file must contain values for the following
-param_names = ['ifg',                  # full path to xml file (str)
+param_names = ['ifg',                    # full path to xml file (str)
                'Nlooks',                 # Window size (az?) for multilooking (int)
+               'removeTOPO',             # Remove topographic phase of SRTM (T/F)
                'use_filter',             # T to use Goldstein Phase filtering, F otherwise
                'unw_method',             # unwrapping criteria: T,D,S (see snaphu docs)
                'tiles',                  # Number of tiles (rows/cols) to chunk data into for unwrapping
@@ -144,11 +146,12 @@ def target_file(params):
     return path.join(params.target_folder,outfile)
 
 def crop(image,ifg):
-    pprint('Cropping to AOI: '+country)
     p = HashMap()
     if 'GAB' in ifg:
+        pprint('Cropping to GABON AOI')
         aoi = aoi_g
     elif 'PER' in ifg:
+        pprint('Cropping to PERU AOI')
         aoi = aoi_p
     else:
         print('Cannot identify country')
@@ -195,7 +198,7 @@ def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
     #------------------- Extract snaphu unwrapping command
     with open('snaphu.conf','r') as file:
         line = file.readlines()[6]
-        cmd = ' '.join(line.split()[1:])
+        cmd = ' '.join(line.split()[1:]) #+['-S']??
     exitcode = bash(cmd)
     if exitcode == 1:
         return 'SNAPHU UNWRAPPING FAIL'
@@ -217,12 +220,18 @@ def get_elevation(phase):
     pprint('Getting elevation' )
     p = HashMap()
     p.put('demName','SRTM 1Sec HGT')
-    return GPF.createProduct('phaseToElevation',p,phase)
+    elv = GPF.createProduct('phaseToElevation',p,phase)
+    band = list(elv.getBandNames())[0]
+    ProductUtils.copyBand(band,elv,phase,False)
+    return phase
 
 def get_height(phase):
     pprint('Getting height' )
     p = HashMap()
-    return GPF.createProduct('phaseToHeight',p,phase)
+    height = GPF.createProduct('phaseToHeight',p,phase)
+    band = list(height.getBandNames())[0]
+    ProductUtils.copyBand(band,height,phase,False)
+    return phase
 
 def terrain_cor(image):
     pprint('Performing Terrain Correction' )
@@ -243,7 +252,7 @@ def create_DEM(params):
     """
     params: set of parameters, given as row of dataframe (see get_params())
     
-    This is the main function, and results in a terrain corrected DEM
+    This calls the processing steps defined above to create a DEM according to those parameters
     
     If everything runs smoothly, then it returns the time taken to process (str)
     If there is an error with any of the snaphu commands, it returns a
@@ -260,8 +269,8 @@ def create_DEM(params):
     
     pprint('Reading Interferogram' )
     image = ProductIO.readProduct(ifg_file)
-    image = crop(image,params.ifg)
-    if params.unw_method == 'D':
+    
+    if params.removeTOPO == 'T':
         image = topo_removal(image)
     image = multilook(image,params.Nlooks)
     
@@ -294,6 +303,10 @@ def create_DEM(params):
     pprint('Writing product to '+target_file(params) )
     ProductIO.writeProduct(image,target_file(params),'BEAM-DIMAP')
     
+    # Writes cropped tif version too
+    image = crop(image,params.ifg)
+    ProductIO.writeProduct(image,target_file(params).split('.')[0]+'_subset','GEOTIFF')
+    
     T = str(datetime.datetime.now() - startT)
     pprint('Total Time Elapsed on this product: ' +T)
     return T
@@ -307,6 +320,7 @@ def main():
     t = datetime.datetime.strftime(datetime.datetime.now(),'%d/%m %H%M')
     pprint('Program started' )
     pprint(t )
+    pprint(sys.argv[1])
     pprint('.......................' )
     
     with open('summary_file.txt','a') as summary_file:

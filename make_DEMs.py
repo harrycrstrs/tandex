@@ -20,7 +20,7 @@ import glob
 import datetime
 
 # Where are the interferograms stored?
-IFG_DIR = '/disk/scratch/local.4/harry/interferograms/useful/'
+IFG_DIR = '/disk/scratch/local.4/harry/interferograms/'
 
 # Where are you going to do your working?
 WOR_DIR = '/disk/scratch/local/harry/temp/'
@@ -36,7 +36,6 @@ param_names = ['ifg',                    # full path to xml file (str)
                'use_filter',             # T to use Goldstein Phase filtering, F otherwise
                'unw_method',             # unwrapping criteria: T,D,S (see snaphu docs)
                'tiles',                  # Number of tiles (rows/cols) to chunk data into for unwrapping
-               'overlap',                # pixel overlap between unwrapping tiles
                'height_method',          # H for 'phase to height', E for 'phase to elevation (see SNAP docs)
                'target_folder']          # full path to output directory (str)  
 
@@ -84,7 +83,12 @@ def check_p(params):
     if not path.exists(params.target_folder):
         try: os.makedirs(params.target_folder)
         except: issues.append('unable to create target folder')
-    # NOTE tiles and overlap NOT included here as yet
+    if (type(params.tiles) != int) or params.tiles < 1:
+        issues.append('Number of tiles must be positive integer')
+    if (type(params.overlap) != int) or (params.overlap < 1 and params.tiles != 1):
+        issues.append('Overlap must be positive integer')
+    if not (params.removeTOPO in ['T','F']):
+        issues.append('remove TOPO must be T or F')
     return issues
 
 def get_params():
@@ -107,6 +111,14 @@ def get_params():
             raise Exception('Problem with parameters - see above')
     return df
 
+def get_overlap(product,params):
+    x,y = shape(product)
+    x /= (params.Nlooks * params.tiles)
+    y /= (params.Nlooks * params.tiles)
+    x_overlap = int(0.35 * x)
+    y_overlap = int(0.35 *y)
+    return (x_overlap, y_overlap)
+
 def shape(product):
     """
     Convenience method for getting the shape of a product in SNAP
@@ -123,7 +135,7 @@ def target_file(params):
         TDX_IFG_[GAB/PER]_[SM/HS]_YYYYMMDDTHHMMSS.dim
     
     Returns : path of output file according to the naming convention:
-        TDX_DEM_[GAB/PER]_ML$$_f[T/F]_unw#_[H/E]_tiles%%_££__YYYYMMDDTHHMMSS.dim
+        TDX_DEM_[GAB/PER]_ML$$_f[T/F]_unw#_[H/E]_tiles%%__YYYYMMDDTHHMMSS.dim
         $$ is number of looks for phase
         [T/F] is T if filtering applied
         # is T,D,S, or N depending on unwrapping method
@@ -139,7 +151,6 @@ def target_file(params):
     parts.append('unw'+params.unw_method)  # unwrapping
     parts.append(params.height_method)     # height conversion method
     parts.append('tiles'+str(params.tiles))# number of unwrapping tiles
-    parts.append(str(params.overlap))      # row/col overlap for unwrapping tiles
     parts.append(params.ifg.split('.')[0].split('_')[-1]) # finally, the datetime
     # Now put an underscore between each element
     outfile = '_'.join(parts) + '.dim'
@@ -189,8 +200,8 @@ def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
                         '-PnumberOfTileCols='+str(tiles),
                         '-PnumberOfTileRows='+str(tiles)]
     if tiles != 1:
-        cmd_list.append('-ProwOverlap='+str(overlap))
-        cmd_list.append('-PcolOverlap='+str(overlap))
+        cmd_list.append('-ProwOverlap='+str(overlap[0]))
+        cmd_list.append('-PcolOverlap='+str(overlap[1]))
     cmd_list.append(ifg)
     exitcode = bash(' '.join(cmd_list))
     if exitcode == 1:
@@ -243,10 +254,14 @@ def terrain_cor(image):
     return GPF.createProduct('Terrain-Correction',p,image)
 
 def topo_removal(image):
+    os.chdir(WOR_DIR)
+    bash('rm removed_SRTM.dim')
     pprint('Topographic Removal')
     p = HashMap()
     p.put('demName','SRTM 1Sec HGT')
-    return GPF.createProduct('TopoPhaseRemoval',p,image)
+    result = GPF.createProduct('TopoPhaseRemoval',p,image)
+    ProductIO.writeProduct(result,'removed_SRTM','BEAM-DIMAP')
+    return ProductIO.readProduct('removed_SRTM.dim')
 
 def create_DEM(params):
     """
@@ -282,10 +297,11 @@ def create_DEM(params):
 
     pprint('Time Elapsed on this product: '+str(datetime.datetime.now() - startT))
     
+    overlap = get_overlap(params)
     image = snaphu_unwrapping(temp_file,
                               unw_dict.get(params.unw_method),
                               params.tiles,
-                              params.overlap)
+                              overlap)
     
     if type(image) == str: # If there was a failure in the unwrapping
         return image

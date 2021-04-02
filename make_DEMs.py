@@ -85,8 +85,6 @@ def check_p(params):
         except: issues.append('unable to create target folder')
     if (type(params.tiles) != int) or params.tiles < 1:
         issues.append('Number of tiles must be positive integer')
-    if (type(params.overlap) != int) or (params.overlap < 1 and params.tiles != 1):
-        issues.append('Overlap must be positive integer')
     if not (params.removeTOPO in ['T','F']):
         issues.append('remove TOPO must be T or F')
     return issues

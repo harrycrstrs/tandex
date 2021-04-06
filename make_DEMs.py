@@ -283,6 +283,7 @@ def create_DEM(params):
     
     pprint('Reading Interferogram' )
     image = ProductIO.readProduct(ifg_file)
+    overlap = get_overlap(image, params)
     
     if params.removeTOPO == 'T':
         image = topo_removal(image)
@@ -293,15 +294,11 @@ def create_DEM(params):
 
     pprint('Writing product to '+temp_file )
     ProductIO.writeProduct(image,temp_file,'BEAM-DIMAP' )
-
     pprint('Time Elapsed on this product: '+str(datetime.datetime.now() - startT))
-    
-    overlap = get_overlap(image, params)
     image = snaphu_unwrapping(temp_file,
                               unw_dict.get(params.unw_method),
                               params.tiles,
                               overlap)
-    
     if type(image) == str: # If there was a failure in the unwrapping
         return image
     

@@ -233,7 +233,7 @@ def get_elevation(phase):
     p.put('demName','SRTM 1Sec HGT')
     elv = GPF.createProduct('phaseToElevation',p,phase)
     band = list(elv.getBandNames())[0]
-    ProductUtils.copyBand(band,elv,phase,False)
+    ProductUtils.copyBand(band,elv,'elevation',phase,True)
     return phase
 
 def get_height(phase):
@@ -241,9 +241,9 @@ def get_height(phase):
     p = HashMap()
     height = GPF.createProduct('phaseToHeight',p,phase)
     band = list(height.getBandNames())[0]
-    ProductUtils.copyBand(band,height,phase,False)
+    ProductUtils.copyBand(band,height,'height',phase,True)
     return phase
-
+ 
 def terrain_cor(image):
     pprint('Performing Terrain Correction' )
     p = HashMap()

@@ -236,7 +236,7 @@ def get_elevation(phase):
     ProductUtils.copyBand(band,elv,'elevation',phase,True)
     return phase
 
-def get_height(phase):
+def get_height(phase):  
     pprint('Getting height' )
     p = HashMap()
     height = GPF.createProduct('phaseToHeight',p,phase)
@@ -317,7 +317,7 @@ def create_DEM(params):
     
     # Writes cropped tif version too
     image = crop(image,params.ifg)
-    ProductIO.writeProduct(image,target_file(params).split('.')[0]+'_subset','GEOTIFF')
+    ProductIO.writeProduct(image,target_file(params).split('.dim')[0]+'_subset','GEOTIFF')
     
     T = str(datetime.datetime.now() - startT)
     pprint('Total Time Elapsed on this product: ' +T)

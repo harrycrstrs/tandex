@@ -185,18 +185,20 @@ def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
     export_dir = path.join(WOR_DIR,'snaphuExport/')
     snaphu_dir = path.join(export_dir,ifg.split('.')[0].split('/')[-1])
     # -----------------------Clear up any old snaphuexports first!
-    os.chdir(snaphu_dir)
-    pprint('**Current Working Directory: '+ os.getcwd())
-    pprint('Clearing snaphuExport directory' )
-    bash('rm -r *')
+    try:
+        os.chdir(snaphu_dir)
+        bash('rm -r *')
+    except:
+        os.mkdir(snaphu_dir)
+        os.chdir(snaphu_dir)
     # ---------------------------Run snaphu export command
     cmd_list = ['gpt',
-                        'SnaphuExport',
-                        '-PtargetFolder=' + export_dir,
-                        '-PstatCostMode=' + unw_method,
-                        '-PnumberOfProcessors=12',
-                        '-PnumberOfTileCols='+str(tiles),
-                        '-PnumberOfTileRows='+str(tiles)]
+                'SnaphuExport',
+                '-PtargetFolder=' + export_dir,
+                '-PstatCostMode=' + unw_method,
+                '-PnumberOfProcessors=12',
+                '-PnumberOfTileCols='+str(tiles),
+                '-PnumberOfTileRows='+str(tiles)]
     if tiles != 1:
         cmd_list.append('-ProwOverlap='+str(overlap[0]))
         cmd_list.append('-PcolOverlap='+str(overlap[1]))
@@ -252,14 +254,13 @@ def terrain_cor(image):
     return GPF.createProduct('Terrain-Correction',p,image)
 
 def topo_removal(image):
-    os.chdir(WOR_DIR)
-    bash('rm removed_SRTM.dim')
     pprint('Topographic Removal')
     p = HashMap()
     p.put('demName','SRTM 1Sec HGT')
     result = GPF.createProduct('TopoPhaseRemoval',p,image)
-    ProductIO.writeProduct(result,'removed_SRTM','BEAM-DIMAP')
-    return ProductIO.readProduct('removed_SRTM.dim')
+    # Write to temporary file
+    ProductIO.writeProduct(result,path.join(WOR_DIR,'removed_SRTM'),'BEAM-DIMAP')
+    return ProductIO.readProduct(path.join(WOR_DIR,'removed_SRTM.dim'))
 
 def create_DEM(params):
     """
@@ -295,7 +296,7 @@ def create_DEM(params):
 
     pprint('Time Elapsed on this product: '+str(datetime.datetime.now() - startT))
     
-    overlap = get_overlap(params)
+    overlap = get_overlap(image, params)
     image = snaphu_unwrapping(temp_file,
                               unw_dict.get(params.unw_method),
                               params.tiles,

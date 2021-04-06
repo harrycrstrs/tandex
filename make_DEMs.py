@@ -279,50 +279,54 @@ def create_DEM(params):
     # ------------------------------------------
     ifg_file = path.join(IFG_DIR,params.ifg)
     temp_file = path.join(WOR_DIR,'TDX_IFG_TEMP.dim')
+    target = target_file(params)
     # ------------------------------------------
+    if not os.path.exists(target): # If not already completed
     
-    pprint('Reading Interferogram' )
-    image = ProductIO.readProduct(ifg_file)
-    overlap = get_overlap(image, params)
-    
-    if params.removeTOPO == 'T':
-        image = topo_removal(image)
-    image = multilook(image,params.Nlooks)
-    
-    if params.use_filter == 'T':
-        image = goldstein(image)
-
-    pprint('Writing product to '+temp_file )
-    ProductIO.writeProduct(image,temp_file,'BEAM-DIMAP' )
-    pprint('Time Elapsed on this product: '+str(datetime.datetime.now() - startT))
-    image = snaphu_unwrapping(temp_file,
-                              unw_dict.get(params.unw_method),
-                              params.tiles,
-                              overlap)
-    if type(image) == str: # If there was a failure in the unwrapping
-        return image
-    
-    pprint('Time Elapsed on this product' )
-    pprint(str(datetime.datetime.now() - startT) )
-    
-    if params.height_method == 'H':
-        image = get_height(image)
-    else:
-        image = get_elevation(image)
+        pprint('Reading Interferogram' )
+        image = ProductIO.readProduct(ifg_file)
+        overlap = get_overlap(image, params)
         
-    image = terrain_cor(image)
+        if params.removeTOPO == 'T':
+            image = topo_removal(image)
+        image = multilook(image,params.Nlooks)
+        
+        if params.use_filter == 'T':
+            image = goldstein(image)
     
-    pprint('Writing product to '+target_file(params) )
-    ProductIO.writeProduct(image,target_file(params),'BEAM-DIMAP')
+        pprint('Writing product to '+temp_file )
+        ProductIO.writeProduct(image,temp_file,'BEAM-DIMAP' )
+        pprint('Time Elapsed on this product: '+str(datetime.datetime.now() - startT))
+        image = snaphu_unwrapping(temp_file,
+                                  unw_dict.get(params.unw_method),
+                                  params.tiles,
+                                  overlap)
+        if type(image) == str: # If there was a failure in the unwrapping
+            return image
+        
+        pprint('Time Elapsed on this product' )
+        pprint(str(datetime.datetime.now() - startT) )
+        
+        if params.height_method == 'H':
+            image = get_height(image)
+        else:
+            image = get_elevation(image)
+            
+        image = terrain_cor(image)
+        
+        pprint('Writing product to '+target)
+        ProductIO.writeProduct(image,target,'BEAM-DIMAP')
     
-    # Writes cropped tif version too
+    else:
+        return 'Skipped as target file already existed'
+    
+    # Writes cropped tif version too just for fun
     image = crop(image,params.ifg)
-    ProductIO.writeProduct(image,target_file(params).split('.dim')[0]+'_subset','GEOTIFF')
+    ProductIO.writeProduct(image,target.split('.dim')[0]+'_subset','GEOTIFF')
     
     T = str(datetime.datetime.now() - startT)
     pprint('Total Time Elapsed on this product: ' +T)
     return T
-    
 
 #-----------------------------------#
 # Main program

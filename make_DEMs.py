@@ -318,6 +318,7 @@ def create_DEM(params):
         ProductIO.writeProduct(image,target,'BEAM-DIMAP')
     
     else:
+        pprint('Skipped as target file already existed')
         return 'Skipped as target file already existed'
     
     # Writes cropped tif version too just for fun

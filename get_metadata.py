@@ -8,7 +8,7 @@ This script uses Snappy to extract the metadata from TDX interferograms
 
 Takes one command line argument - the directory containing the interferograms
 
-!! I think check_coverage returns TRUE regardless of the answer
+Assumes GAB or PER in file names to indicate location
 
 """
 
@@ -18,7 +18,6 @@ import sys
 import os
 import pandas as pd
 import math
-from io import StringIO
 
 IFG_DIR = sys.argv[1]
 os.chdir(IFG_DIR)

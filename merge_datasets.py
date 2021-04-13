@@ -8,8 +8,8 @@ import xarray as xr
 from datetime import datetime
 import glob
 
-def add_time(file,reference):
-    ds = xr.open_dataset(file).interp_like(reference,method='linear')
+def add_time(file):
+    ds = xr.open_dataset(file)
     # Same spatial grid and resolution
     # Then, add the time
     time = datetime.strptime(ds.start_date,'%d-%b-%Y %H:%M:%S.%f')
@@ -29,15 +29,19 @@ def add_time(file,reference):
     ds = ds.drop(intensity)
     ds = ds.drop(phase)
     ds = ds.drop('height_HH')
-    
+    ds = ds.drop('elevation')
     return ds
 
 def merge(str_pattern):
     ff = [f for f in files if str_pattern in f]
     print(str_pattern)
     print('merging '+str(len(ff))+' images')
-    ref = xr.open_dataset(ff[0]) 
-    DS = xr.merge([add_time(f,ref) for f in ff] , compat='override')
+    ref = xr.open_dataset(ff[0])
+    LAT,LON,ELEV = ref.lat, ref.lon, ref.elevation
+    datasets = [add_time(f) for f in ff]
+    datasets = [ds.interp(lat=LAT,lon=LON) for ds in datasets]
+    DS = xr.merge(datasets)
+    DS['elevation'] = ELEV
     DS.to_netcdf(str_pattern+'_merged.nc')
     
 #------------------------------------------------------------------------

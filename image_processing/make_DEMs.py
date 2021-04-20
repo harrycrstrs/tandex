@@ -25,10 +25,6 @@ IFG_DIR = '/disk/scratch/local.4/harry/interferograms/'
 # Where are you going to do your working?
 WOR_DIR = '/disk/scratch/local/harry/temp/'
 
-# Areas to crop to (needs a better long-term solution)
-aoi_g = 'POLYGON((12.24259248791666899 -0.12970155056629756, 12.29813277791832959 -0.12785363430965335, 12.30306056704971596 -0.15772826280552016, 12.24259248791666899 -0.16050013350314909, 12.24259248791666899 -0.12970155056629756))'
-aoi_p = 'POLYGON((-69.73323900046604251 -11.01624899728848916, -69.7027921931213541 -11.01584634449108258, -69.70283777217426291 -11.04080977551521237, -69.73351247478349535 -11.04157027686576065, -69.73323900046604251 -11.01624899728848916))'
-
 # parameters - each row in parameter csv file must contain values for the following
 param_names = ['ifg',                    # full path to xml file (str)
                'Nlooks',                 # Window size (az?) for multilooking (int)
@@ -151,23 +147,8 @@ def target_file(params):
     parts.append('tiles'+str(params.tiles))# number of unwrapping tiles
     parts.append(params.ifg.split('.')[0].split('_')[-1]) # finally, the datetime
     # Now put an underscore between each element
-    outfile = '_'.join(parts) + '.dim'
-    return path.join(params.target_folder,outfile)
-
-def crop(image,ifg):
-    p = HashMap()
-    if 'GAB' in ifg:
-        pprint('Cropping to GABON AOI')
-        aoi = aoi_g
-    elif 'PER' in ifg:
-        pprint('Cropping to PERU AOI')
-        aoi = aoi_p
-    else:
-        print('Cannot identify country')
-    p.put('geoRegion',aoi)
-    p.put('copyMetadata','true')
-    return GPF.createProduct('Subset',p,image)
-    
+    outfile = '_'.join(parts) + '.nc'
+    return path.join(params.target_folder,outfile) 
 
 def multilook(image,Nlooks):
     pprint('Multi-looking' )
@@ -315,15 +296,15 @@ def create_DEM(params):
         image = terrain_cor(image)
         
         pprint('Writing product to '+target)
-        ProductIO.writeProduct(image,target,'BEAM-DIMAP')
+        ProductIO.writeProduct(image,target,'NetCDF4-BEAM')
     
     else:
         pprint('Skipped as target file already existed')
         return 'Skipped as target file already existed'
     
-    # Writes cropped tif version too just for fun
-    image = crop(image,params.ifg)
-    ProductIO.writeProduct(image,target.split('.dim')[0]+'_subset','GEOTIFF')
+    # Write cropped tif version too just for fun ?
+    #image = crop(image,params.ifg)
+    #ProductIO.writeProduct(image,target.split('.dim')[0]+'_subset','GEOTIFF')
     
     T = str(datetime.datetime.now() - startT)
     pprint('Total Time Elapsed on this product: ' +T)

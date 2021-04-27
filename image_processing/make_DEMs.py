@@ -1,339 +1,241 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Mar 18 09:11:00 2021
+Created on Mon Apr 26 14:24:05 2021
 
 @author: s1332488
-
-Code for producing DEMs from TanDEM-X images 
 """
 
-# IMPORTS
-from snappy import ProductIO
-from snappy import GPF
-from snappy import HashMap
-from snappy import ProductUtils
-import sys
-import os.path as path
-import os
-import pandas as pd
+from snappy import ProductIO, HashMap, GPF, ProductUtils
+import snappy
 import glob
-import datetime
+from scipy.linalg import lstsq
+import numpy as np
+import sys
+import os
 
-# Where are the interferograms stored?
-IFG_DIR = '/disk/scratch/local.4/harry/interferograms/'
-
-# Where are you going to do your working?
-WOR_DIR = '/disk/scratch/local/harry/temp/'
-
-# parameters - each row in parameter csv file must contain values for the following
-param_names = ['ifg',                    # full path to xml file (str)
-               'Nlooks',                 # Window size (az?) for multilooking (int)
-               'removeTOPO',             # Remove topographic phase of SRTM (T/F)
-               'use_filter',             # T to use Goldstein Phase filtering, F otherwise
-               'unw_method',             # unwrapping criteria: T,D,S (see snaphu docs)
-               'tiles',                  # Number of tiles (rows/cols) to chunk data into for unwrapping
-               'height_method',          # H for 'phase to height', E for 'phase to elevation (see SNAP docs)
-               'target_folder']          # full path to output directory (str)  
-
-unw_dict = {'T':'TOPO','D':'DEFO','S':'SMOOTH'} 
-
-def pprint(x): 
-    # flush print with spacing to monitor progress via logfile
-    print('*************')
-    print(x,flush=True)
-
-def bash(cmd):
-    """
-    Send cmd to the terminal 
-    Return 1 if nonzero exit code
-    """
-    print('Running command ------' ,flush=True)
-    print(cmd ,flush=True)
-    print('-------------' ,flush=True)
-    exitcode = os.system(cmd)
-    if exitcode != 0:
-        pprint('NONZERO EXIT CODE: '+str(exitcode) )
-        return 1
+def createP(function, inputProduct, writeout=False, **kwargs):
+    # pythonic version of GPF.createProduct()
+    # function is string of SNAP operator
+    # inputProduct is SNAP product object
+    # kwargs contains any parameters to pass to the operator
+    p = HashMap()
+    for arg in kwargs:
+        p.put(arg,kwargs.get(arg))
+    result = GPF.createProduct(function,p,inputProduct)
+    if writeout != False:
+        ProductIO.writeProduct(result,writeout,'BEAM-DIMAP')
     else:
-        return 0
+        return result
 
-def check_p(params):
-    """
-    Ensures input parameters all make sense
-    Takes a row from the parameter dataframe
-    Returns a list of issues (of length 0 if none)
-    """
-    issues = []
-    if path.exists(IFG_DIR+params.ifg) == False:
-        issues.append( 'interfergoram not found' )
-    if type(params.Nlooks) != int:
-        issues.append( 'Nlooks not an integer' )
-    elif (params.Nlooks < 1):
-        issues.append('Nlooks must be 1 or more')
-    if not (params.use_filter in ['T','F']):
-        issues.append('use_filter must be T or F')
-    if not (params.unw_method in ['T','D','S']):
-        issues.append('unw_method must be T,D, or S')
-    if not (params.height_method in ['E','H']):
-        issues.append('height_method must be E or H')
-    if not path.exists(params.target_folder):
-        try: os.makedirs(params.target_folder)
-        except: issues.append('unable to create target folder')
-    if (type(params.tiles) != int) or params.tiles < 1:
-        issues.append('Number of tiles must be positive integer')
-    if not (params.removeTOPO in ['T','F']):
-        issues.append('remove TOPO must be T or F')
-    return issues
+def get_data(imageBand):
+    W,H = imageBand.getRasterWidth(), imageBand.getRasterHeight()
+    array = np.zeros(W*H)
+    imageBand.readPixels(0,0,W,H,array)
+    return array.reshape(H,W).transpose()
 
-def get_params():
-    """
-    Reads from csv file with each row containing the parameters required for a DEM
-    The columns of the csv file should match the param_names defined in this code
-    Returns: pandas dataframe
-    """
-    try:
-        param_file = sys.argv[1]
-    except:
-        param_file = ' '
-    while path.exists(param_file) == False:
-        param_file = input('Please provide valid path to the parameter file: ')
-    df = pd.read_csv(param_file,names=param_names,header=0)
-    for _,row in df.iterrows():
-        issues = check_p(row)
-        if len(issues) > 0 :
-            pprint(issues)
-            raise Exception('Problem with parameters - see above')
-    return df
+def zero_phase(wrapped_phase):
+    # Return phase values centered roughly on zero
+    vals,binedges=np.histogram(wrapped_phase,bins=50)
+    binsize = binedges[1] - binedges[0]
+    peak = binedges[vals.argmax()] + 0.5*binsize
+    recentered = wrapped_phase - peak
+    return recentered
 
-def get_overlap(product,params):
-    x,y = shape(product)
-    x /= (params.Nlooks * params.tiles)
-    y /= (params.Nlooks * params.tiles)
-    x_overlap = int(0.35 * x)
-    y_overlap = int(0.35 *y)
-    return (x_overlap, y_overlap)
-
-def shape(product):
-    """
-    Convenience method for getting the shape of a product in SNAP
-    (Not currently used but left for reference)
-    """
-    band = product.getBandAt(0)
-    return band.getRasterWidth(), band.getRasterHeight()
-
-def target_file(params):
-    """
-    params : a single row of the dataframe produced by get_params()
-    
-    ifg is in format 
-        TDX_IFG_[GAB/PER]_[SM/HS]_YYYYMMDDTHHMMSS.dim
-    
-    Returns : path of output file according to the naming convention:
-        TDX_DEM_[GAB/PER]_ML$$_f[T/F]_unw#_[H/E]_tiles%%__YYYYMMDDTHHMMSS.dim
-        $$ is number of looks for phase
-        [T/F] is T if filtering applied
-        # is T,D,S, or N depending on unwrapping method
-        [H/E] is H for height method, E for elevation method
-        %% is number of tiles (sqrt of) used for unwrapping
-        ££ is pixel overlapp
-    """
-    parts = ['TDX','DEM']
-    parts.append(params.ifg.split('_')[2]) # country
-    parts.append(params.ifg.split('_')[3]) # mode
-    parts.append('ML'+str(params.Nlooks))  # multilooks
-    parts.append('f'+params.use_filter)    # filtering
-    parts.append('unw'+params.unw_method)  # unwrapping
-    parts.append(params.height_method)     # height conversion method
-    parts.append('tiles'+str(params.tiles))# number of unwrapping tiles
-    parts.append(params.ifg.split('.')[0].split('_')[-1]) # finally, the datetime
-    # Now put an underscore between each element
-    outfile = '_'.join(parts) + '.nc'
-    return path.join(params.target_folder,outfile) 
-
-def multilook(image,Nlooks):
-    pprint('Multi-looking' )
-    p = HashMap()
-    p.put('nRgLooks', Nlooks)
-    return GPF.createProduct('Multilook',p,image)
-
-def goldstein(image):
-    pprint('Phase Filtering')
-    p = HashMap()
-    return GPF.createProduct('GoldsteinPhaseFiltering',p,image)
-
-def snaphu_unwrapping(ifg,unw_method,tiles,overlap):
-    pprint('Beginning snaphu_unwrapping' )
-    export_dir = path.join(WOR_DIR,'snaphuExport/')
-    snaphu_dir = path.join(export_dir,ifg.split('.')[0].split('/')[-1])
-    # -----------------------Clear up any old snaphuexports first!
-    try:
-        os.chdir(snaphu_dir)
-        bash('rm -r *')
-    except:
-        os.mkdir(snaphu_dir)
-        os.chdir(snaphu_dir)
-    # ---------------------------Run snaphu export command
-    cmd_list = ['gpt',
-                'SnaphuExport',
-                '-PtargetFolder=' + export_dir,
-                '-PstatCostMode=' + unw_method,
-                '-PnumberOfProcessors=12',
-                '-PnumberOfTileCols='+str(tiles),
-                '-PnumberOfTileRows='+str(tiles)]
-    if tiles != 1:
-        cmd_list.append('-ProwOverlap='+str(overlap[0]))
-        cmd_list.append('-PcolOverlap='+str(overlap[1]))
-    cmd_list.append(ifg)
-    exitcode = bash(' '.join(cmd_list))
-    if exitcode == 1:
-        return 'SnaphuExport FAILURE'
-    #------------------- Extract snaphu unwrapping command
-    with open('snaphu.conf','r') as file:
-        line = file.readlines()[6]
-        cmd = ' '.join(line.split()[1:]) #+['-S']??
-    exitcode = bash(cmd)
-    if exitcode == 1:
-        return 'SNAPHU UNWRAPPING FAIL'
-    # ----------------------------Snaphu Import
-    unwrapped_phase = glob.glob('./UnwPhase*.hdr')[0]
-    pprint('Reading Unwrapped phase as: ' )
-    pprint(unwrapped_phase )
-    exitcode = bash(' '.join(['gpt',
-                        'SnaphuImport',
-                        ifg,
-                        unwrapped_phase]))
-    if exitcode == 1:
-        return 'SNAPHU IMPORT FAIL'
-    pprint('Reading in target.dim' )
-    product = ProductIO.readProduct('target.dim')
-    return product
-
-def get_elevation(phase):
-    pprint('Getting elevation' )
-    p = HashMap()
-    p.put('demName','SRTM 1Sec HGT')
-    elv = GPF.createProduct('phaseToElevation',p,phase)
-    band = list(elv.getBandNames())[0]
-    ProductUtils.copyBand(band,elv,'elevation',phase,True)
-    return phase
-
-def get_height(phase):  
-    pprint('Getting height' )
-    p = HashMap()
-    height = GPF.createProduct('phaseToHeight',p,phase)
-    band = list(height.getBandNames())[0]
-    ProductUtils.copyBand(band,height,'height',phase,True)
-    return phase
- 
-def terrain_cor(image):
-    pprint('Performing Terrain Correction' )
-    p = HashMap()
-    p.put('alignToStandardGrid','true')
-    p.put('demName','SRTM 1Sec HGT')
-    p.put('saveDEM','true')
-    p.put('saveLocalIncidenceAngle','true')
-    return GPF.createProduct('Terrain-Correction',p,image)
-
-def topo_removal(image):
-    pprint('Topographic Removal')
-    p = HashMap()
-    p.put('demName','SRTM 1Sec HGT')
-    result = GPF.createProduct('TopoPhaseRemoval',p,image)
-    # Write to temporary file
-    ProductIO.writeProduct(result,path.join(WOR_DIR,'removed_SRTM'),'BEAM-DIMAP')
-    return ProductIO.readProduct(path.join(WOR_DIR,'removed_SRTM.dim'))
-
-def create_DEM(params):
-    """
-    params: set of parameters, given as row of dataframe (see get_params())
-    
-    This calls the processing steps defined above to create a DEM according to those parameters
-    
-    If everything runs smoothly, then it returns the time taken to process (str)
-    If there is an error with any of the snaphu commands, it returns a
-    description of where the error occured (str)
-
-    """
-    pprint('Starting inteferogram file: '+params.ifg )
-    startT = datetime.datetime.now()
-    pprint('Time now: '  +datetime.datetime.strftime(startT,'%d/%m %H%M') )
-    # ------------------------------------------
-    ifg_file = path.join(IFG_DIR,params.ifg)
-    temp_file = path.join(WOR_DIR,'TDX_IFG_TEMP.dim')
-    target = target_file(params)
-    # ------------------------------------------
-    if not os.path.exists(target): # If not already completed
-    
-        pprint('Reading Interferogram' )
-        image = ProductIO.readProduct(ifg_file)
-        overlap = get_overlap(image, params)
-        
-        if params.removeTOPO == 'T':
-            image = topo_removal(image)
-        image = multilook(image,params.Nlooks)
-        
-        if params.use_filter == 'T':
-            image = goldstein(image)
-    
-        pprint('Writing product to '+temp_file )
-        ProductIO.writeProduct(image,temp_file,'BEAM-DIMAP' )
-        pprint('Time Elapsed on this product: '+str(datetime.datetime.now() - startT))
-        image = snaphu_unwrapping(temp_file,
-                                  unw_dict.get(params.unw_method),
-                                  params.tiles,
-                                  overlap)
-        if type(image) == str: # If there was a failure in the unwrapping
-            return image
-        
-        pprint('Time Elapsed on this product' )
-        pprint(str(datetime.datetime.now() - startT) )
-        
-        if params.height_method == 'H':
-            image = get_height(image)
-        else:
-            image = get_elevation(image)
-            
-        image = terrain_cor(image)
-        
-        pprint('Writing product to '+target)
-        ProductIO.writeProduct(image,target,'NetCDF4-BEAM')
-    
+def cost_fun(recentered,offset):
+    # Calculates how many 'jumps' remain after "quasi-unwrapping"
+    # The quasi unwrapping simply assumes all values are within a 
+    # 2pi interval and determines the offset required to center them
+    if offset < 0:
+        a = recentered + (recentered < offset)*2*np.pi
     else:
-        pprint('Skipped as target file already existed')
-        return 'Skipped as target file already existed'
-    
-    # Write cropped tif version too just for fun ?
-    #image = crop(image,params.ifg)
-    #ProductIO.writeProduct(image,target.split('.dim')[0]+'_subset','GEOTIFF')
-    
-    T = str(datetime.datetime.now() - startT)
-    pprint('Total Time Elapsed on this product: ' +T)
-    return T
+        a = recentered - (recentered > offset)*2*np.pi
+    cost1 = (np.abs(a[:-1] - a[1:]) > 5).sum()
+    cost2 = (np.abs(a[:,:-1] - a[:,1:]) > 5).sum()
+    return cost1+cost2
 
-#-----------------------------------#
-# Main program
-#-----------------------------------#
+def unwrap(zeroed_phase):
+    vals,binedges=np.histogram(zeroed_phase,bins=50)
+    binsize = binedges[1] - binedges[0]
+    initial_guess = binedges[vals.argmin()] + 0.5*binsize
+    tryout = np.linspace(initial_guess-0.2,initial_guess+0.2,25)
+    costs = [cost_fun(zeroed_phase,offset) for offset in tryout]
+    fit = np.polyfit(tryout,costs,2)
+    offset = -fit[1]/(2*fit[0])
+    if offset < 0:
+        unwrapped = zeroed_phase + (zeroed_phase < offset)*2*np.pi
+    else:
+        unwrapped = zeroed_phase - (zeroed_phase > offset)*2*np.pi
+    return unwrapped
+
+def get_samples(array,N):
+    """
+    Takes a selection of N samples from a 2D array
+
+    Parameters
+    ----------
+    N : int
+        number of samples to take
+    array : (m x n) numpy array 
+
+    Returns
+    -------
+    A : (N x 3) numpy array 
+        Matrix with 3 columns: the first two contain X and Y values, the third contains 1s
+    B : (N x 1) numpy array
+        Matrix of Z values
+        
+    The best fit plane to the sampled points is specified by p, in 
+    A x p = B
+    Where p is a (3 x 1) matrix
+    N > 3 , i.e. the problem is over-specified
+    so we are looking for least squares solution
+    """
+    X,Y = array.shape[0], array.shape[1]
+    x_vals = np.random.randint(0,X,N)
+    y_vals = np.random.randint(0,Y,N)
+    B = array[x_vals,y_vals]
+    not_nan = ~np.isnan(B)
+    B = B[not_nan]
+    A = np.ones((N,3))
+    A[:,0] = x_vals
+    A[:,1] = y_vals
+    A = A[not_nan]
+    return A, B
+
+def plane(p,x,y):
+    # Equation of a plane
+    # [Broken down into x and y
+    # But equivalent to the matrix version described above]
+    return p[0]*x + p[1]*y + p[2]
+
+def get_coeff(array,N):
+    A,B = get_samples(array,N)
+    result = lstsq(A,B) # Scipy.optimise finds least squares solution 
+    return result[0]    # First component is the array p itself
+    
+def remove_plane(array,N):
+    """
+
+    Parameters
+    ----------
+    array : 2D numpy array
+    N : int, number of sample points to take
+
+    Returns
+    -------
+    residual : array with best-fit plane subtracted - same shape as input
+
+    """
+    coeff = get_coeff(array,N)
+    y,x = np.meshgrid(np.arange(array.shape[1]),np.arange(array.shape[0]))
+    best_fit = plane(coeff,x,y)
+    residual = array - best_fit
+    return residual
+
+def get_kz(image):
+    # Get array of wavenumber values for every pixel
+    W = image.getBandAt(0).getRasterWidth()
+    H = image.getBandAt(0).getRasterHeight()
+    rangeT = np.asarray(image.getTiePointGrid('slant_range_time')
+                    .readPixels(0,0,W,H,np.zeros(W*H,dtype=np.float32))
+                   ).reshape(H,W).transpose()
+    theta = np.asarray(image.getTiePointGrid('incident_angle')
+                  .readPixels(0,0,W,H,np.zeros(W*H,dtype=np.float32))
+                  ).reshape(H,W).transpose()
+    c = 3*10**8
+    metadata = image.getMetadataRoot()
+    freq = float(str(metadata
+              .getElement('Abstracted_Metadata')
+              .getAttribute('radar_frequency')
+              .getData()))
+    wavelength = c / (freq*10**6)
+    theta = np.deg2rad(theta)
+    baseline = float(str(metadata
+                         .getElement('CoSSC_Metadata')
+                         .getElement('cossc_product')
+                         .getElement('commonAcquisitionInfo')
+                         .getElement('acquisitionGeometry')
+                         .getAttribute('effectiveBaseline')
+                         .getData()))
+    R = 0.5 * c * rangeT*10**-9
+    kz = 4*np.pi*baseline / (wavelength*R*np.sin(theta))
+    return kz
+
+# ------------------------------------- #
+
+def phaseToHeight(inputfile,NLOOKS):
+    TEMP1 = 'ML_fl_temp.dim'
+    TEMP2 = 'height_temp.dim'
+    OUT = '_'.join([inputfile.split('.dim')[0],
+                    'ML',
+                    str(NLOOKS),
+                    'height_TC.dim'
+                    ])
+    image = ProductIO.readProduct(inputfile)
+    
+    # SNAP Processing -------------------------------
+    image = createP('Multilook',image,nRgLooks=NLOOKS)
+    image = createP('GoldsteinPhaseFiltering',image,
+                    alpha=0.2,
+                    useCoherenceMask=True,
+                    coherenceThreshold=0.2,
+                    writeout=TEMP1)
+    
+    # Numpy processing -----------------------------
+    image = ProductIO.readProduct(TEMP1)
+    phase = image.getBand([x for x in list(image.getBandNames()) if 'Phase' in x][0])
+    phase_data = get_data(phase)
+    recentered = zero_phase(phase_data)
+    unwrapped = unwrap(recentered)
+    unw_deramped = remove_plane(unwrapped, 1000)
+    height = unw_deramped / get_kz(image)
+    height = height.transpose().flatten()
+    
+    # Write to target Product--------------------------
+    W = image.getBandAt(0).getRasterWidth()
+    H = image.getBandAt(0).getRasterHeight()
+    targetP = snappy.Product('height_product','height_type',W,H)
+    ProductUtils.copyMetadata(image,targetP)
+    ProductUtils.copyTiePointGrids(image,targetP)
+    targetP.setProductWriter(ProductIO.getProductWriter('BEAM-DIMAP'))
+    for band in ['Phase','coh']:
+        bandname= [x for x in list(image.getBandNames()) if band in x][0]
+        ProductUtils.copyBand(bandname,image,band,targetP,True)
+    targetP.setProductReader(ProductIO.getProductReader('BEAM-DIMAP'))
+    ProductIO.writeProduct(targetP,TEMP2,'BEAM-DIMAP')
+    targetB = targetP.addBand('height', snappy.ProductData.TYPE_FLOAT32)
+    targetB.setUnit('m')
+    targetP.setProductWriter(ProductIO.getProductWriter('BEAM-DIMAP'))
+    targetP.writeHeader(TEMP2)
+    targetB.writePixels(0,0,W,H,height)
+    targetP.closeIO()
+    
+    # Terrain correction-------------------------
+    image = ProductIO.readProduct(TEMP2)
+    image = createP('TopoPhaseRemoval',
+                    image,
+                    alignToStandardGrid='true',
+                    demName='SRTM 1Sec HGT',
+                    saveDEM='true',
+                    alignToStandardGrid='true')
+    ProductIO.writeProduct(image,OUT,'BEAM-DIMAP')
+    
+#-----------------------------------------------------------
 
 def main():
-    t = datetime.datetime.strftime(datetime.datetime.now(),'%d/%m %H%M')
-    pprint('Program started' )
-    pprint(t )
-    pprint(sys.argv[1])
-    pprint('.......................' )
-    
-    with open('summary_file.txt','a') as summary_file:
-        summary_file.write('-------PROGRAM START------------- \n')
-        summary_file.write(t +' \n')
-        
-        for _,row in get_params().iterrows():
-            summary_file.write('-------------PARAMS---------------- \n')
-            summary_file.write(str(row)+'\n')
-            summary_file.write('---Result (exit code if fail or time taken) \n')
-            
-            summary_file.write(create_DEM(row)+'\n') # where it all happens
-            
-        summary_file.write('-------PROGRAM END------------- \n')
-        t = datetime.datetime.strftime(datetime.datetime.now(),'%d/%m %H%M')
-        summary_file.write(t + ' \n')
+    NLOOKS = int(sys.argv[1])
+    files = [f for f in glob.glob('*.dim') if 'height' not in f]
+    N = len(files)
+    i=1
+    for f in files:
+        print('******')
+        print('Processing: '+str()+' of '+str(N))
+        print(f)
+        print('...')
+        phaseToHeight(f,NLOOKS)
+        print('Done')
         
 main()
+            
+    
+    

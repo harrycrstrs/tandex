@@ -212,28 +212,28 @@ def phaseToHeight(inputfile,NLOOKS):
     
     # Terrain correction-------------------------
     image = ProductIO.readProduct(TEMP2)
-    image = createP('TopoPhaseRemoval',
+    image = createP('Terrain-Correction',
                     image,
                     alignToStandardGrid='true',
                     demName='SRTM 1Sec HGT',
-                    saveDEM='true',
-                    alignToStandardGrid='true')
+                    saveDEM='true')
     ProductIO.writeProduct(image,OUT,'BEAM-DIMAP')
     
 #-----------------------------------------------------------
 
 def main():
     NLOOKS = int(sys.argv[1])
-    files = [f for f in glob.glob('*.dim') if 'height' not in f]
+    files = [f for f in glob.glob('TDX_IFG*.dim') if 'height' not in f]
     N = len(files)
     i=1
     for f in files:
         print('******')
-        print('Processing: '+str()+' of '+str(N))
+        print('Processing: '+str(i)+' of '+str(N))
         print(f)
         print('...')
         phaseToHeight(f,NLOOKS)
         print('Done')
+        i+=1
         
 main()
             

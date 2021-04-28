@@ -1,0 +1,8 @@
+#! /usr/bin/bash
+# Was performed by going into interferogram directory first
+python /home/s1332488/code/tandex/image_processing/make_DEMs.py 8
+python /home/s1332488/code/tandex/image_processing/make_DEMs.py	16
+python /home/s1332488/code/tandex/image_processing/make_DEMs.py	32
+mv *height_TC* /disk/scratch/local.4/harry/DEM/DIM/
+
+

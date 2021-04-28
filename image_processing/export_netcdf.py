@@ -12,8 +12,31 @@ $python export_netcdf.py <image_to_export>
 
 import sys
 from snappy import ProductIO as io
+import glob
 
-file = sys.argv[1]
-image = io.readProduct(file)
-target = file.split('.dim')[0]+'.nc'
-io.writeProduct(image,target,'NetCDF4-BEAM')
+files = glob.glob('TDX_IFG*height_TC*.dim')
+
+for f in files:
+    meta = f.split('_')
+    country = meta[2]
+    mode = meta[3]
+    datetime = meta[4]
+    ML = meta[7]
+    image = io.readProduct(f)
+    orbit = str(image.getMetadataRoot()
+                .getElement('CoSSC_Metadata')
+                .getElement('cossc_product')
+                .getElement('commonAcquisitionInfo')
+                .getElement('acquisitionGeometry')
+                .getAttribute('orbitDirection')
+                .getData())
+    
+    target = '_'.join(['TDX',
+                       'DEM',
+                       country,
+                       mode,
+                       datetime,
+                       orbit,
+                       'ML'+ML+'.nc'])
+    
+    io.writeProduct(image,target,'NetCDF4-BEAM')

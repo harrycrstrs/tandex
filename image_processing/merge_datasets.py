@@ -2,8 +2,18 @@
 """
 Created on Fri Apr  9 11:33:16 2021
 
-@author: s1332488
+@author: Harry Carstairs
+
+This script merges phase height images of the:
+     same pass;
+     same number of looks;
+     and same region.
+(It determines this by looking for a pattern in the file names).
+The result is a net CDF file where TIME is one of the dimensions.
+
+Call this script inside the folder where the unmerged net CDF files are.
 """
+
 import xarray as xr
 from datetime import datetime
 import glob

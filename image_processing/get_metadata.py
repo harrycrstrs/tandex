@@ -2,7 +2,7 @@
 """
 Created on Tue Mar 30 13:25:34 2021
 
-@author: s1332488
+@author: Harry Carstairs
 
 This script uses Snappy to extract the metadata from TDX interferograms
 
@@ -41,6 +41,7 @@ attributes = ['file',
             #'azimuth_pixel']
 
 def check_coverage(file,p):
+    ## Does the image definitely cover our study areas in Peru / Gabon
     if 'GAB' in file:
         region = 'POLYGON((12.24885799008746368 -0.14350824099999146, 12.24885110630293283 -0.14259615803456555, 12.24975595848531107 -0.14259626696242139, 12.24975584715663501 -0.14353065658873754, 12.24885799008746368 -0.14350824099999146))'
     elif 'PER' in file:

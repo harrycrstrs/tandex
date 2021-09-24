@@ -2,7 +2,12 @@
 """
 Created on Mon Apr 26 14:24:05 2021
 
-@author: s1332488
+@author: Harry Carstairs
+
+This script takes a command line argument for the number of range looks .
+Call this script inside a folder containing TDX interferograms (with SRTM phase removed).
+For each interferogram, an unwrapped, terrain-corrected phase height image will be processed and saved.
+
 """
 
 from snappy import ProductIO, HashMap, GPF, ProductUtils
@@ -12,6 +17,8 @@ from scipy.linalg import lstsq
 import numpy as np
 import sys
 import os
+sys.path.append('/home/s1332488/code/tandex')
+from deramp import remove_plane
 
 def createP(function, inputProduct, writeout=False, **kwargs):
     # pythonic version of GPF.createProduct()
@@ -28,6 +35,7 @@ def createP(function, inputProduct, writeout=False, **kwargs):
         return result
 
 def get_data(imageBand):
+    # takes SNAP image band object and returns a numpy array containing the data in that band
     W,H = imageBand.getRasterWidth(), imageBand.getRasterHeight()
     array = np.zeros(W*H)
     imageBand.readPixels(0,0,W,H,array)
@@ -54,6 +62,7 @@ def cost_fun(recentered,offset):
     return cost1+cost2
 
 def unwrap(zeroed_phase):
+    # Quasi unwrapping, where we assume all values lie already within one 2pi interval
     vals,binedges=np.histogram(zeroed_phase,bins=50)
     binsize = binedges[1] - binedges[0]
     initial_guess = binedges[vals.argmin()] + 0.5*binsize
@@ -66,71 +75,6 @@ def unwrap(zeroed_phase):
     else:
         unwrapped = zeroed_phase - (zeroed_phase > offset)*2*np.pi
     return unwrapped
-
-def get_samples(array,N):
-    """
-    Takes a selection of N samples from a 2D array
-
-    Parameters
-    ----------
-    N : int
-        number of samples to take
-    array : (m x n) numpy array 
-
-    Returns
-    -------
-    A : (N x 3) numpy array 
-        Matrix with 3 columns: the first two contain X and Y values, the third contains 1s
-    B : (N x 1) numpy array
-        Matrix of Z values
-        
-    The best fit plane to the sampled points is specified by p, in 
-    A x p = B
-    Where p is a (3 x 1) matrix
-    N > 3 , i.e. the problem is over-specified
-    so we are looking for least squares solution
-    """
-    X,Y = array.shape[0], array.shape[1]
-    x_vals = np.random.randint(0,X,N)
-    y_vals = np.random.randint(0,Y,N)
-    B = array[x_vals,y_vals]
-    not_nan = ~np.isnan(B)
-    B = B[not_nan]
-    A = np.ones((N,3))
-    A[:,0] = x_vals
-    A[:,1] = y_vals
-    A = A[not_nan]
-    return A, B
-
-def plane(p,x,y):
-    # Equation of a plane
-    # [Broken down into x and y
-    # But equivalent to the matrix version described above]
-    return p[0]*x + p[1]*y + p[2]
-
-def get_coeff(array,N):
-    A,B = get_samples(array,N)
-    result = lstsq(A,B) # Scipy.optimise finds least squares solution 
-    return result[0]    # First component is the array p itself
-    
-def remove_plane(array,N):
-    """
-
-    Parameters
-    ----------
-    array : 2D numpy array
-    N : int, number of sample points to take
-
-    Returns
-    -------
-    residual : array with best-fit plane subtracted - same shape as input
-
-    """
-    coeff = get_coeff(array,N)
-    y,x = np.meshgrid(np.arange(array.shape[1]),np.arange(array.shape[0]))
-    best_fit = plane(coeff,x,y)
-    residual = array - best_fit
-    return residual
 
 def get_kz(image):
     # Get array of wavenumber values for every pixel
@@ -157,13 +101,31 @@ def get_kz(image):
                          .getElement('acquisitionGeometry')
                          .getAttribute('effectiveBaseline')
                          .getData()))
+    HoA = float(str(metadata
+                    .getElement('CoSSC_Metadata')
+                    .getElement('cossc_product')
+                    .getElement('commonAcquisitionInfo')
+                    .getElement('acquisitionGeometry')
+                    .getAttribute('heightOfAmbiguity')
+                    .getData()))
     R = 0.5 * c * rangeT*10**-9
     kz = 4*np.pi*baseline / (wavelength*R*np.sin(theta))
+    if HoA < 0:
+        kz = -kz
     return kz
 
 # ------------------------------------- #
 
 def phaseToHeight(inputfile,NLOOKS):
+    """
+    This is the central processing chain
+    inputfile is a string of an interferogram file name
+    NLOOKS is the number of range looks to be used for multi-looking
+                                    #
+    Multi-looking, Goldstein phase filtering, unwrapping and terrain correction are performed
+    The output is then written to file in BEAM-DIMAP format
+    """
+    
     TEMP1 = 'ML_fl_temp.dim'
     TEMP2 = 'height_temp.dim'
     OUT = '_'.join([inputfile.split('.dim')[0],
@@ -187,7 +149,7 @@ def phaseToHeight(inputfile,NLOOKS):
     phase_data = get_data(phase)
     recentered = zero_phase(phase_data)
     unwrapped = unwrap(recentered)
-    unw_deramped = remove_plane(unwrapped, 1000)
+    unw_deramped = remove_plane(unwrapped, 10000)
     height = unw_deramped / get_kz(image)
     height = height.transpose().flatten()
     
@@ -236,6 +198,3 @@ def main():
         i+=1
         
 main()
-            
-    
-    

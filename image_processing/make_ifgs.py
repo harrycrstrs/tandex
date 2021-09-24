@@ -3,7 +3,7 @@
 """
 Created on Mon Mar 22 2021
 
-@author: s1332488
+@author: Harry Carstairs
 
 Code for producing Interferograms from TanDEM-X images 
 
